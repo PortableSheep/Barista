@@ -25,24 +25,20 @@ open dist/Barista.app
 
 ## Install (from GitHub Releases)
 
-This installs the latest release into `/Applications`.
+By default this builds from source and installs into `/Applications`.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/portablesheep/Barista/main/Barista/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/PortableSheep/Barista/main/scripts/install.sh | bash
 ```
 
-If you don’t have an Apple Developer account (no signing/notarization), prefer a local build install:
+If you don’t have an Apple Developer account (no signing/notarization), the local build install is usually the smoothest option:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/portablesheep/Barista/main/Barista/scripts/install.sh | INSTALL_METHOD=source bash
+curl -fsSL https://raw.githubusercontent.com/PortableSheep/Barista/main/scripts/install.sh | INSTALL_METHOD=source bash
 ```
 
-Optional (downloads the prebuilt zip release):
+Optional (downloads the latest prebuilt zip from GitHub Releases):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/portablesheep/Barista/main/Barista/scripts/install.sh | INSTALL_METHOD=release bash
+curl -fsSL https://raw.githubusercontent.com/PortableSheep/Barista/main/scripts/install.sh | INSTALL_METHOD=release bash
 ```
-
-## Notes
-
-- This is not currently signed so you might have issues with gatekeeper... sorry. I'll get a signed version out eventually.

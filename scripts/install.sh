@@ -12,7 +12,7 @@ set -euo pipefail
 # - This script does NOT attempt to bypass macOS security features (Gatekeeper/quarantine).
 # - For a smooth “no warnings” install experience for non-dev users, ship a code-signed + notarized app.
 
-REPO_DEFAULT="portablesheep/barista"
+REPO_DEFAULT="PortableSheep/Barista"
 REPO="${REPO:-$REPO_DEFAULT}"
 ASSET_NAME="${ASSET_NAME:-Barista-macos.zip}"
 INSTALL_DIR="${INSTALL_DIR:-/Applications}"

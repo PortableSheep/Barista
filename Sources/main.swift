@@ -15,11 +15,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var durationMenuItem: NSMenuItem!
     private var keepDisplayAwakeItem: NSMenuItem!
     private var launchAtLoginItem: NSMenuItem!
+    private var updateAvailableItem: NSMenuItem!
 
     private var caffeinateProcess: Process?
 
     private var sessionEndDate: Date?
     private var countdownTimer: Timer?
+
+    private var updateCheckTimer: Timer?
+    private var latestReleaseURL: URL?
+    private var isCheckingForUpdates = false
 
     private var lastKnownActive = false
 
@@ -60,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         buildMenu()
         refreshMenuState()
+
+        scheduleUpdateChecks()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -147,11 +154,135 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launchAtLoginItem.target = self
         menu.addItem(launchAtLoginItem)
 
+        updateAvailableItem = NSMenuItem(title: "Update Available", action: #selector(openLatestRelease), keyEquivalent: "")
+        updateAvailableItem.target = self
+        updateAvailableItem.isHidden = true
+        menu.addItem(updateAvailableItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    private func scheduleUpdateChecks() {
+        updateCheckTimer?.invalidate()
+        updateCheckTimer = nil
+
+        // Initial check shortly after launch.
+        Task { @MainActor in
+            await checkForUpdates()
+        }
+
+        // Periodic checks (keep it infrequent to avoid rate limits).
+        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 6 * 60 * 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.checkForUpdates()
+            }
+        }
+        RunLoop.main.add(updateCheckTimer!, forMode: .common)
+    }
+
+    private struct GitHubLatestRelease: Decodable {
+        let tag_name: String
+        let html_url: String
+        let draft: Bool?
+        let prerelease: Bool?
+    }
+
+    private func currentAppVersion() -> String {
+        let dict = Bundle.main.infoDictionary
+        let short = dict?["CFBundleShortVersionString"] as? String
+        let bundle = dict?["CFBundleVersion"] as? String
+        return (short?.isEmpty == false ? short! : (bundle ?? "0.0.0"))
+    }
+
+    private func normalizedVersion(_ version: String) -> [Int] {
+        // Strip leading 'v' and keep numeric dot-separated components.
+        let cleaned = version.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "v", with: "", options: [.anchored])
+
+        return cleaned
+            .split(separator: ".")
+            .map { part in
+                let digits = part.prefix { $0.isNumber }
+                return Int(digits) ?? 0
+            }
+    }
+
+    private func isVersion(_ a: String, newerThan b: String) -> Bool {
+        let va = normalizedVersion(a)
+        let vb = normalizedVersion(b)
+        let n = max(va.count, vb.count)
+        for i in 0..<n {
+            let ai = i < va.count ? va[i] : 0
+            let bi = i < vb.count ? vb[i] : 0
+            if ai != bi { return ai > bi }
+        }
+        return false
+    }
+
+    private func setUpdateAvailable(tag: String?, url: URL?) {
+        latestReleaseURL = url
+
+        if let tag, let _ = url {
+            updateAvailableItem.title = "Update Available: \(tag)"
+            updateAvailableItem.isEnabled = true
+            updateAvailableItem.isHidden = false
+        } else {
+            updateAvailableItem.isHidden = true
+        }
+    }
+
+    private func githubRepoSlug() -> String {
+        // Keep in sync with scripts/install.sh default.
+        return "PortableSheep/Barista"
+    }
+
+    private func makeGitHubRequest(url: URL) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("Barista", forHTTPHeaderField: "User-Agent")
+        return req
+    }
+
+    private func checkForUpdates() async {
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        defer { isCheckingForUpdates = false }
+
+        let apiURL = URL(string: "https://api.github.com/repos/\(githubRepoSlug())/releases/latest")!
+        do {
+            let (data, _) = try await URLSession.shared.data(for: makeGitHubRequest(url: apiURL))
+            let latest = try JSONDecoder().decode(GitHubLatestRelease.self, from: data)
+
+            // Ignore drafts/prereleases.
+            if latest.draft == true || latest.prerelease == true {
+                setUpdateAvailable(tag: nil, url: nil)
+                return
+            }
+
+            let current = currentAppVersion()
+            let latestTag = latest.tag_name
+            let latestURL = URL(string: latest.html_url)
+
+            if isVersion(latestTag, newerThan: current) {
+                setUpdateAvailable(tag: latestTag, url: latestURL)
+            } else {
+                setUpdateAvailable(tag: nil, url: nil)
+            }
+        } catch {
+            // Fail silently; don't show stale update UI.
+            setUpdateAvailable(tag: nil, url: nil)
+        }
+    }
+
+    @objc private func openLatestRelease() {
+        guard let url = latestReleaseURL else { return }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func statusItemClicked() {

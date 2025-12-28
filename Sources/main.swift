@@ -1,4 +1,5 @@
 import Cocoa
+import IOKit.pwr_mgt
 import ServiceManagement
 
 private enum DefaultsKey {
@@ -17,7 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchAtLoginItem: NSMenuItem!
     private var updateAvailableItem: NSMenuItem!
 
-    private var caffeinateProcess: Process?
+    private var systemSleepAssertionID: IOPMAssertionID = 0
+    private var displaySleepAssertionID: IOPMAssertionID = 0
 
     private var sessionEndDate: Date?
     private var countdownTimer: Timer?
@@ -29,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastKnownActive = false
 
     private var isActive: Bool {
-        caffeinateProcess?.isRunning == true
+        systemSleepAssertionID != 0
     }
 
     private var durationSeconds: Int {
@@ -70,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        stopCaffeinateIfNeeded()
+        stopKeepAwakeIfNeeded()
     }
 
     private func startCountdownIfNeeded() {
@@ -111,8 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let remaining = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
         if remaining == 0 {
-            // If caffeinate hasn't terminated yet, avoid showing stale time.
-            button.title = ""
+            // Time is up.
+            stopKeepAwakeIfNeeded()
+            refreshMenuState()
             return
         }
 
@@ -327,9 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Selecting a duration implies enabling keep-awake with that duration.
         if isActive {
-            restartCaffeinate()
+            restartKeepAwake()
         } else {
-            startCaffeinate()
+            startKeepAwake()
             refreshMenuState()
         }
     }
@@ -338,7 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keepDisplayAwake.toggle()
 
         if isActive {
-            restartCaffeinate()
+            restartKeepAwake()
         } else {
             refreshMenuState()
         }
@@ -363,9 +366,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleKeepAwake() {
         if isActive {
-            stopCaffeinateIfNeeded()
+            stopKeepAwakeIfNeeded()
         } else {
-            startCaffeinate()
+            startKeepAwake()
         }
         refreshMenuState()
     }
@@ -374,65 +377,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    private func restartCaffeinate() {
-        stopCaffeinateIfNeeded()
-        startCaffeinate()
+    private func restartKeepAwake() {
+        stopKeepAwakeIfNeeded()
+        startKeepAwake()
         refreshMenuState()
     }
 
-    private func startCaffeinate() {
-        guard caffeinateProcess == nil else { return }
+    private func startKeepAwake() {
+        guard systemSleepAssertionID == 0 else { return }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/caffeinate")
+        let reason = "Barista Keep Awake" as CFString
 
-        var args: [String] = ["-i"]
+        var systemID: IOPMAssertionID = 0
+        let systemResult = IOPMAssertionCreateWithName(
+            kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            reason,
+            &systemID
+        )
+        guard systemResult == kIOReturnSuccess else {
+            systemSleepAssertionID = 0
+            return
+        }
+        systemSleepAssertionID = systemID
+
         if keepDisplayAwake {
-            args.append("-d")
-        }
-        if durationSeconds > 0 {
-            args.append(contentsOf: ["-t", String(durationSeconds)])
-        }
-        process.arguments = args
-
-        process.standardOutput = nil
-        process.standardError = nil
-
-        // Important: avoid a race where an older process' termination handler fires
-        // after we already started a new one (during restart). Only clear if it's
-        // still the active tracked process.
-        process.terminationHandler = { [weak self, weak process] _ in
-            DispatchQueue.main.async {
-                guard let self, let terminated = process else { return }
-                if self.caffeinateProcess === terminated {
-                    self.caffeinateProcess = nil
-                    self.stopCountdown()
-                    self.refreshMenuState()
-                }
-            }
-        }
-
-        do {
-            try process.run()
-            caffeinateProcess = process
-
-            if durationSeconds > 0 {
-                sessionEndDate = Date().addingTimeInterval(TimeInterval(durationSeconds))
+            var displayID: IOPMAssertionID = 0
+            let displayResult = IOPMAssertionCreateWithName(
+                kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+                IOPMAssertionLevel(kIOPMAssertionLevelOn),
+                reason,
+                &displayID
+            )
+            if displayResult == kIOReturnSuccess {
+                displaySleepAssertionID = displayID
             } else {
-                sessionEndDate = nil
+                displaySleepAssertionID = 0
             }
-        } catch {
-            caffeinateProcess = nil
+        } else {
+            displaySleepAssertionID = 0
+        }
+
+        if durationSeconds > 0 {
+            sessionEndDate = Date().addingTimeInterval(TimeInterval(durationSeconds))
+        } else {
             sessionEndDate = nil
         }
     }
 
-    private func stopCaffeinateIfNeeded() {
-        guard let process = caffeinateProcess else { return }
-        if process.isRunning {
-            process.terminate()
+    private func stopKeepAwakeIfNeeded() {
+        if systemSleepAssertionID != 0 {
+            IOPMAssertionRelease(systemSleepAssertionID)
+            systemSleepAssertionID = 0
         }
-        caffeinateProcess = nil
+        if displaySleepAssertionID != 0 {
+            IOPMAssertionRelease(displaySleepAssertionID)
+            displaySleepAssertionID = 0
+        }
         stopCountdown()
     }
 

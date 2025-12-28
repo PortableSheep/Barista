@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Barista}",
+            "name": "Debug Barista",
+            "target": "Barista",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Barista"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Barista}",
+            "name": "Release Barista",
+            "target": "Barista",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Barista"
+        }
+    ]
+}

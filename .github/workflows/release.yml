@@ -32,13 +32,65 @@ jobs:
 
       - name: Create GitHub Release (tag only)
         if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ.get("GITHUB_TOKEN", "")
+          current_tag = os.environ["GITHUB_REF_NAME"]
+
+          def gh_get(url: str):
+            req = urllib.request.Request(url)
+            req.add_header("Accept", "application/vnd.github+json")
+            req.add_header("User-Agent", "Barista-Release-Notes")
+            if token:
+              req.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(req) as resp:
+              return json.loads(resp.read().decode("utf-8"))
+
+          releases = gh_get(f"https://api.github.com/repos/{repo}/releases?per_page=20")
+          prev_tag = None
+          for r in releases:
+            tag = r.get("tag_name")
+            if tag and tag != current_tag:
+              prev_tag = tag
+              break
+
+          notes_path = "release-notes.md"
+          with open(notes_path, "w", encoding="utf-8") as f:
+            if not prev_tag:
+              f.write("## Changes\n\n")
+              f.write("- Initial release\n")
+            else:
+              comp = gh_get(f"https://api.github.com/repos/{repo}/compare/{prev_tag}...{current_tag}")
+              commits = comp.get("commits", [])
+              f.write(f"## Changes since {prev_tag}\n\n")
+              if not commits:
+                f.write("- No commits found\n")
+              else:
+                for c in commits:
+                  sha = (c.get("sha") or "")[:7]
+                  msg = ((c.get("commit") or {}).get("message") or "").splitlines()[0].strip()
+                  author = ((c.get("author") or {}).get("login") or "")
+                  if author:
+                    f.write(f"- {msg} ({sha}) @{author}\n")
+                  else:
+                    f.write(f"- {msg} ({sha})\n")
+          print(f"Wrote {notes_path} using base={prev_tag!r}")
+          PY
+        shell: bash
+      - name: Publish GitHub Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             dist/Barista-macos.zip
 
@@ -52,6 +104,61 @@ jobs:
           echo "tag=branch-${sanitized_ref}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "name=${GITHUB_REF_NAME} (${GITHUB_SHA::7})" >> "$GITHUB_OUTPUT"
 
+      - name: Generate branch release notes (commits since previous release)
+        if: startsWith(github.ref, 'refs/heads/release/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_RELEASE_TAG: ${{ steps.branch_release.outputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ.get("GITHUB_TOKEN", "")
+          head = os.environ.get("GITHUB_SHA")
+          this_tag = os.environ.get("BRANCH_RELEASE_TAG")
+
+          def gh_get(url: str):
+            req = urllib.request.Request(url)
+            req.add_header("Accept", "application/vnd.github+json")
+            req.add_header("User-Agent", "Barista-Release-Notes")
+            if token:
+              req.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(req) as resp:
+              return json.loads(resp.read().decode("utf-8"))
+
+          releases = gh_get(f"https://api.github.com/repos/{repo}/releases?per_page=20")
+          prev_tag = None
+          for r in releases:
+            tag = r.get("tag_name")
+            if tag and tag != this_tag:
+              prev_tag = tag
+              break
+
+          notes_path = "release-notes.md"
+          with open(notes_path, "w", encoding="utf-8") as f:
+            if not prev_tag:
+              f.write("## Changes\n\n")
+              f.write("- Initial release\n")
+            else:
+              comp = gh_get(f"https://api.github.com/repos/{repo}/compare/{prev_tag}...{head}")
+              commits = comp.get("commits", [])
+              f.write(f"## Changes since {prev_tag}\n\n")
+              if not commits:
+                f.write("- No commits found\n")
+              else:
+                for c in commits:
+                  sha = (c.get("sha") or "")[:7]
+                  msg = ((c.get("commit") or {}).get("message") or "").splitlines()[0].strip()
+                  author = ((c.get("author") or {}).get("login") or "")
+                  if author:
+                    f.write(f"- {msg} ({sha}) @{author}\n")
+                  else:
+                    f.write(f"- {msg} ({sha})\n")
+          print(f"Wrote {notes_path} using base={prev_tag!r}")
+          PY
+        shell: bash
+
       - name: Create GitHub Release (release branches)
         if: startsWith(github.ref, 'refs/heads/release/')
         uses: softprops/action-gh-release@v2
@@ -62,6 +169,6 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             dist/Barista-macos.zip

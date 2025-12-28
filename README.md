@@ -1,6 +1,6 @@
 # Barista (macOS)
 
-A tiny menu-bar “keep awake” app that wraps macOS `/usr/bin/caffeinate`.
+A tiny menu-bar “keep awake” app for macOS.
 
 ## Features
 
@@ -8,10 +8,10 @@ A tiny menu-bar “keep awake” app that wraps macOS `/usr/bin/caffeinate`.
 - Duration (Indefinitely / 15m / 30m / 1h / 2h)
 - Option to **allow the display to sleep** (disable “Keep Display Awake”)
 
-Under the hood it runs `caffeinate` with:
-- `-i` always (prevents idle sleep)
-- optional `-d` (prevents display sleep)
-- optional `-t <seconds>` (timeout)
+Under the hood it uses native macOS power assertions:
+- Prevents idle sleep while enabled
+- Optionally prevents display sleep
+- Supports a timed duration that automatically disables when it expires
 
 ## Build a .app
 

@@ -42,9 +42,9 @@ jobs:
           files: |
             dist/Barista-macos.zip
 
-      - name: Compute prerelease tag (release branches)
+      - name: Compute branch release tag (release branches)
         if: startsWith(github.ref, 'refs/heads/release/')
-        id: prerelease
+        id: branch_release
         shell: bash
         run: |
           set -euo pipefail
@@ -52,16 +52,16 @@ jobs:
           echo "tag=branch-${sanitized_ref}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "name=${GITHUB_REF_NAME} (${GITHUB_SHA::7})" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Pre-Release (release branches)
+      - name: Create GitHub Release (release branches)
         if: startsWith(github.ref, 'refs/heads/release/')
         uses: softprops/action-gh-release@v2
         with:
-          name: ${{ steps.prerelease.outputs.name }}
-          tag_name: ${{ steps.prerelease.outputs.tag }}
+          name: ${{ steps.branch_release.outputs.name }}
+          tag_name: ${{ steps.branch_release.outputs.tag }}
           target_commitish: ${{ github.sha }}
           draft: false
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           files: |
             dist/Barista-macos.zip

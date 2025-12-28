@@ -17,7 +17,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build Barista.app
-        working-directory: Barista
         run: bash scripts/build_app.sh
 
       - name: Upload artifact
@@ -25,12 +24,12 @@ jobs:
         with:
           name: Barista-macos
           path: |
-            Barista/dist/Barista.app
-            Barista/dist/Barista-macos.zip
+            dist/Barista.app
+            dist/Barista-macos.zip
 
       - name: Create GitHub Release (tag only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Barista/dist/Barista-macos.zip
+            dist/Barista-macos.zip

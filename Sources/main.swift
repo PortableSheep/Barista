@@ -18,6 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var caffeinateProcess: Process?
 
+    private var sessionEndDate: Date?
+    private var countdownTimer: Timer?
+
     private var lastKnownActive = false
 
     private var isActive: Bool {
@@ -46,8 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = iconImage(active: false)
+        statusItem.button?.title = ""
         statusItem.button?.toolTip = "Barista"
 
         statusItem.button?.target = self
@@ -60,6 +64,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stopCaffeinateIfNeeded()
+    }
+
+    private func startCountdownIfNeeded() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+
+        guard isActive, durationSeconds > 0, sessionEndDate != nil else {
+            updateStatusItemTitle()
+            return
+        }
+
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                self.updateStatusItemTitle()
+            }
+        }
+
+        // Keep ticking during menu tracking modes.
+        RunLoop.main.add(countdownTimer!, forMode: .common)
+        updateStatusItemTitle()
+    }
+
+    private func stopCountdown() {
+        countdownTimer?.invalidate()
+        countdownTimer = nil
+        sessionEndDate = nil
+        updateStatusItemTitle()
+    }
+
+    private func updateStatusItemTitle() {
+        guard let button = statusItem.button else { return }
+
+        guard isActive, durationSeconds > 0, let endDate = sessionEndDate else {
+            button.title = ""
+            return
+        }
+
+        let remaining = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
+        if remaining == 0 {
+            // If caffeinate hasn't terminated yet, avoid showing stale time.
+            button.title = ""
+            return
+        }
+
+        button.title = formatRemainingTime(seconds: remaining)
+    }
+
+    private func formatRemainingTime(seconds: Int) -> String {
+        // Display a compact, rounded-up label (e.g. 15m, 2h5m).
+        // For sub-hour values we round up to the next minute so 14:59 shows as 15m.
+        if seconds >= 3600 {
+            let hours = seconds / 3600
+            let minutes = Int(ceil(Double(seconds % 3600) / 60.0))
+            if minutes == 0 {
+                return "\(hours)h"
+            }
+            return "\(hours)h\(minutes)m"
+        }
+
+        let minutes = max(1, Int(ceil(Double(seconds) / 60.0)))
+        return "\(minutes)m"
     }
 
     private func buildMenu() {
@@ -209,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, let terminated = process else { return }
                 if self.caffeinateProcess === terminated {
                     self.caffeinateProcess = nil
+                    self.stopCountdown()
                     self.refreshMenuState()
                 }
             }
@@ -217,8 +284,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try process.run()
             caffeinateProcess = process
+
+            if durationSeconds > 0 {
+                sessionEndDate = Date().addingTimeInterval(TimeInterval(durationSeconds))
+            } else {
+                sessionEndDate = nil
+            }
         } catch {
             caffeinateProcess = nil
+            sessionEndDate = nil
         }
     }
 
@@ -228,11 +302,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             process.terminate()
         }
         caffeinateProcess = nil
+        stopCountdown()
     }
 
     private func refreshMenuState() {
         let active = isActive
         statusItem.button?.image = iconImage(active: active)
+        startCountdownIfNeeded()
 
         toggleItem.title = active ? "Disable Keep Awake" : "Enable Keep Awake"
 

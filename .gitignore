@@ -1,0 +1,54 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Icon must end with two \r
+Icon\r\r
+
+# Thumbnails
+._*
+
+# Spotlight, Trashes, and system files
+.Spotlight-V100
+.Trashes
+.fseventsd
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+*.dSYM.tar
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+*.xcodeproj
+
+# SwiftPM / Apple tooling artifacts
+.swiftpm/
+
+# Coverage & profiling
+*.profraw
+*.profdata
+
+# Logs
+*.log
+
+# App build artifacts (common in scripts)
+/dist/
+/build/
+/out/
+
+# Temporary files
+*.swp
+*.swo
+*~

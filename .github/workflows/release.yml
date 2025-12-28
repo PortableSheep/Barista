@@ -1,0 +1,36 @@
+name: Build Barista (.app)
+
+on:
+  push:
+    branches:
+      - 'release/**'
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Barista.app
+        working-directory: Barista
+        run: bash scripts/build_app.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Barista-macos
+          path: |
+            Barista/dist/Barista.app
+            Barista/dist/Barista-macos.zip
+
+      - name: Create GitHub Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Barista/dist/Barista-macos.zip

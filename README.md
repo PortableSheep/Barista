@@ -2,6 +2,9 @@
 
 A tiny menu-bar “keep awake” app for macOS.
 
+## Screenshot
+![Screenshot](./Barista.png)
+
 ## Features
 
 - Menu bar icon + menu toggle (Enable/Disable)

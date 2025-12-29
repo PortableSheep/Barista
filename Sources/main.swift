@@ -1,6 +1,7 @@
 import Cocoa
 import IOKit.pwr_mgt
 import ServiceManagement
+import SwiftUI
 
 private enum DefaultsKey {
     static let durationSeconds = "durationSeconds"
@@ -11,6 +12,12 @@ private enum DefaultsKey {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
+
+    private var panel: NSPanel?
+    private var panelModel: PopoverModel?
+    private var panelHostingController: NSViewController?
+    private var panelGlobalEventMonitor: Any?
+    private var panelLocalEventMonitor: Any?
 
     private var toggleItem: NSMenuItem!
     private var durationMenuItem: NSMenuItem!
@@ -67,6 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         buildMenu()
         refreshMenuState()
+
+        setupPanel()
 
         scheduleUpdateChecks()
     }
@@ -167,6 +176,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    private func setupPanel() {
+        let model = PopoverModel(app: self)
+        panelModel = model
+
+        let hosting = NSHostingController(rootView: PopoverContentView(model: model))
+        panelHostingController = hosting
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 280),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+
+        panel.isMovable = false
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+
+        // SwiftUI view is responsible for its own material background.
+        panel.contentViewController = hosting
+
+        self.panel = panel
+    }
+
+    private func startPanelEventMonitors() {
+        stopPanelEventMonitors()
+
+        panelGlobalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                guard let panel = self.panel, panel.isVisible else { return }
+                let clickPoint = NSEvent.mouseLocation
+                if !panel.frame.contains(clickPoint) {
+                    self.closePanel()
+                }
+            }
+        }
+
+        panelLocalEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .keyDown, event.keyCode == 53 { // Escape
+                Task { @MainActor in self.closePanel() }
+                return nil
+            }
+
+            // If click is outside panel, close.
+            if let panel = self.panel, panel.isVisible {
+                let clickPoint = NSEvent.mouseLocation
+                if !panel.frame.contains(clickPoint) {
+                    Task { @MainActor in self.closePanel() }
+                    return event
+                }
+            }
+            return event
+        }
+    }
+
+    private func stopPanelEventMonitors() {
+        if let monitor = panelGlobalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            panelGlobalEventMonitor = nil
+        }
+        if let monitor = panelLocalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            panelLocalEventMonitor = nil
+        }
+    }
+
+    private func closePanel() {
+        panel?.orderOut(nil)
+        stopPanelEventMonitors()
     }
 
     private func scheduleUpdateChecks() {
@@ -295,13 +382,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let isContextClick = (event.type == .rightMouseUp) || event.modifierFlags.contains(.control)
-        if isContextClick {
-            refreshMenuState()
-            NSMenu.popUpContextMenu(menu, with: event, for: button)
-        } else {
+        if event.type == .rightMouseUp {
+            togglePanel(relativeTo: button)
+            return
+        }
+
+        if event.type == .leftMouseUp {
             toggleKeepAwake()
         }
+    }
+
+    private func togglePanel(relativeTo button: NSStatusBarButton) {
+        guard let panel else { return }
+
+        if panel.isVisible {
+            closePanel()
+            return
+        }
+
+        panelModel?.refreshFromApp()
+
+        // Determine the status item button frame in screen coordinates.
+        let buttonRectInWindow = button.convert(button.bounds, to: nil)
+        let buttonRectOnScreen = button.window?.convertToScreen(buttonRectInWindow) ?? .zero
+
+        // Ensure hosting view has laid out its preferred size.
+        panelHostingController?.view.layoutSubtreeIfNeeded()
+        let targetSize = panelHostingController?.view.fittingSize ?? NSSize(width: 280, height: 260)
+
+        let width = max(260, min(340, targetSize.width))
+        let height = max(240, min(420, targetSize.height))
+        let gap: CGFloat = 2
+
+        let x = buttonRectOnScreen.midX - (width / 2)
+        let y = buttonRectOnScreen.minY - height - gap
+
+        if let screen = button.window?.screen {
+            var frame = NSRect(x: x, y: y, width: width, height: height)
+            frame = frame.offsetBy(dx: 0, dy: 0)
+            // Clamp horizontally so it doesn't go off-screen.
+            frame.origin.x = max(screen.visibleFrame.minX + 6, min(frame.origin.x, screen.visibleFrame.maxX - frame.size.width - 6))
+            panel.setFrame(frame, display: false)
+        } else {
+            panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: false)
+        }
+
+        startPanelEventMonitors()
+        panel.orderFrontRegardless()
     }
 
     private func buildDurationSubmenu() -> NSMenu {
@@ -442,6 +569,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = iconImage(active: active)
         startCountdownIfNeeded()
 
+        panelModel?.refreshFromApp()
+
         toggleItem.title = active ? "Disable Keep Awake" : "Enable Keep Awake"
 
         keepDisplayAwakeItem.state = keepDisplayAwake ? .on : .off
@@ -501,6 +630,214 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(systemSymbolName: name, accessibilityDescription: "Barista")
         image?.isTemplate = true
         return image
+    }
+
+    private func remainingLabelForPopover() -> String? {
+        guard isActive, durationSeconds > 0, let endDate = sessionEndDate else { return nil }
+        let remaining = max(0, Int(ceil(endDate.timeIntervalSinceNow)))
+        if remaining == 0 { return nil }
+        return formatRemainingTime(seconds: remaining)
+    }
+
+    private func setDurationFromPopover(seconds: Int) {
+        durationSeconds = seconds
+        if isActive {
+            restartKeepAwake()
+        } else {
+            startKeepAwake()
+        }
+        refreshMenuState()
+    }
+
+    @MainActor
+    private final class PopoverModel: ObservableObject {
+        private weak var app: AppDelegate?
+
+        @Published var isActive: Bool = false
+        @Published var durationSeconds: Int = 0
+        @Published var keepDisplayAwake: Bool = false
+        @Published var launchAtLoginEnabled: Bool = false
+        @Published var launchAtLoginOn: Bool = false
+        @Published var remainingLabel: String? = nil
+        @Published var updateTitle: String? = nil
+        @Published var hasUpdateURL: Bool = false
+
+        init(app: AppDelegate) {
+            self.app = app
+            refreshFromApp()
+        }
+
+        func refreshFromApp() {
+            guard let app else { return }
+            isActive = app.isActive
+            durationSeconds = app.durationSeconds
+            keepDisplayAwake = app.keepDisplayAwake
+            remainingLabel = app.remainingLabelForPopover()
+            updateTitle = app.updateAvailableItem.isHidden ? nil : app.updateAvailableItem.title
+            hasUpdateURL = app.latestReleaseURL != nil
+
+            if #available(macOS 13.0, *) {
+                launchAtLoginEnabled = true
+                launchAtLoginOn = (SMAppService.mainApp.status == .enabled)
+            } else {
+                launchAtLoginEnabled = false
+                launchAtLoginOn = false
+            }
+        }
+
+        func toggleActive() {
+            app?.toggleKeepAwake()
+            refreshFromApp()
+        }
+
+        func setActive(_ value: Bool) {
+            guard let app else { return }
+            if value != app.isActive {
+                app.toggleKeepAwake()
+            }
+            refreshFromApp()
+        }
+
+        func setDuration(_ seconds: Int) {
+            app?.setDurationFromPopover(seconds: seconds)
+            refreshFromApp()
+        }
+
+        func setKeepDisplayAwake(_ value: Bool) {
+            guard let app else { return }
+            app.keepDisplayAwake = value
+            if app.isActive {
+                app.restartKeepAwake()
+            }
+            app.refreshMenuState()
+            refreshFromApp()
+        }
+
+        func toggleLaunchAtLogin() {
+            app?.toggleLaunchAtLogin()
+            refreshFromApp()
+        }
+
+        func openUpdate() {
+            app?.openLatestRelease()
+        }
+
+        func quit() {
+            app?.quit()
+        }
+    }
+
+    private struct PopoverContentView: View {
+        @ObservedObject var model: PopoverModel
+
+        private let durations: [(label: String, seconds: Int)] = [
+            ("∞", 0),
+            ("15m", 15 * 60),
+            ("30m", 30 * 60),
+            ("1h", 60 * 60),
+            ("2h", 2 * 60 * 60)
+        ]
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(model.isActive ? AnyShapeStyle(Color.green) : AnyShapeStyle(.tertiary))
+                        .frame(width: 8, height: 8)
+                        .scaleEffect(model.isActive ? 1.0 : 0.85)
+                        .opacity(model.isActive ? 1.0 : 0.55)
+                        .animation(.easeInOut(duration: 0.18), value: model.isActive)
+
+                    Label("Barista", systemImage: model.isActive ? "cup.and.saucer.fill" : "cup.and.saucer")
+                        .font(.headline)
+                        .symbolRenderingMode(.hierarchical)
+                        .symbolEffect(.bounce, value: model.isActive)
+
+                    Spacer()
+
+                    if model.isActive, let remaining = model.remainingLabel {
+                        Text(remaining)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle("", isOn: Binding(
+                        get: { model.isActive },
+                        set: { model.setActive($0) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(PillToggleStyle(onColor: .green))
+                }
+
+                Picker("Duration", selection: Binding(
+                    get: { model.durationSeconds },
+                    set: { model.setDuration($0) }
+                )) {
+                    ForEach(durations, id: \.seconds) { item in
+                        Text(item.label).tag(item.seconds)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+
+                Toggle("Keep Display Awake", isOn: Binding(
+                    get: { model.keepDisplayAwake },
+                    set: { model.setKeepDisplayAwake($0) }
+                ))
+
+                Toggle("Launch at Login", isOn: Binding(
+                    get: { model.launchAtLoginOn },
+                    set: { _ in model.toggleLaunchAtLogin() }
+                ))
+                .disabled(!model.launchAtLoginEnabled)
+
+                if let updateTitle = model.updateTitle, model.hasUpdateURL {
+                    Button(updateTitle) {
+                        model.openUpdate()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Divider()
+
+                HStack {
+                    Spacer()
+                    Button("Quit") {
+                        model.quit()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(14)
+            .frame(width: 300)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .tint(model.isActive ? .green : .accentColor)
+        }
+    }
+
+    private struct PillToggleStyle: ToggleStyle {
+        var onColor: Color = .green
+
+        func makeBody(configuration: Configuration) -> some View {
+            Button {
+                configuration.isOn.toggle()
+            } label: {
+                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .fill(configuration.isOn ? AnyShapeStyle(onColor.gradient) : AnyShapeStyle(.quaternary))
+
+                    Circle()
+                        .fill(.background)
+                        .shadow(radius: 1, y: 1)
+                        .padding(2)
+                }
+                .frame(width: 42, height: 24)
+                .animation(.easeInOut(duration: 0.16), value: configuration.isOn)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("Keep Awake"))
+            .accessibilityValue(Text(configuration.isOn ? "On" : "Off"))
+        }
     }
 }
 

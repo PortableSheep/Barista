@@ -16,15 +16,20 @@ Under the hood it uses native macOS power assertions:
 - Optionally prevents display sleep
 - Supports a timed duration that automatically disables when it expires
 
+## How to use
+- Clicking the menu bar icon turns it on or off.
+- Right clicking shows the context menu letting you change duration and other settings.
+
 ## Build a .app
 
 From the repo:
 
 ```bash
 cd Barista
-bash scripts/build_app.sh
+./scripts/build_app.sh
 open dist/Barista.app
 ```
+
 
 ## Install (from GitHub Releases)
 
